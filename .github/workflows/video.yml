@@ -3,210 +3,181 @@ name: AI Video Maker
 on:
   workflow_dispatch:
 
+  schedule:
+    # 02:00 UTC
+    - cron: "0 2 * * *"
+
+    # 14:00 UTC
+    - cron: "0 14 * * *"
+
 permissions:
   contents: read
 
+concurrency:
+  group: ai-video-maker
+  cancel-in-progress: false
+
 jobs:
+
   build:
+    name: Build AI Video
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+
+      # ======================================================
+      # 1. CHECKOUT
+      # ======================================================
+
+      - name: Checkout
         uses: actions/checkout@v4
+
+      # ======================================================
+      # 2. PYTHON
+      # ======================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # ======================================================
+      # 3. FFMPEG
+      # ======================================================
 
       - name: Install FFmpeg
-        shell: bash
         run: |
-          set -euo pipefail
+          set -e
+
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+
+          echo "FFmpeg:"
           ffmpeg -version | head -n 1
 
-      - name: Install Python dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f requirements.txt ]; then
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-          else
-            python -m pip install --upgrade pip pillow
-          fi
+          echo "ffprobe:"
+          ffprobe -version | head -n 1
 
-      - name: Clean old frames
-        shell: bash
+      # ======================================================
+      # 4. PYTHON DEPENDENCIES
+      # ======================================================
+
+      - name: Install Python dependencies
         run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          rm -f frame1.png frame2.png frame3.png frame4.png frame5.png frame6.png
-          rm -f frame7.png frame8.png frame9.png frame10.png frame11.png frame12.png
-          rm -f video.mp4
-          rm -f render_manifest.json
-          echo "Old frame files removed."
+          set -e
+
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ======================================================
+      # 5. PREFLIGHT
+      # ======================================================
+
+      - name: Preflight
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "RUNNING PREFLIGHT"
+          echo "=========================================="
+
+          python preflight.py
+
+      # ======================================================
+      # 6. CACHE
+      # ======================================================
+
+      - name: Restore render cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache/images
+            cache/tts
+          key: |
+            ai-video-cache-${{ runner.os }}-${{ hashFiles('assets/characters/characters.json', 'assets/characters/miu.png', 'assets/characters/bong.png') }}-${{ hashFiles('assets/story.json') }}
+          restore-keys: |
+            ai-video-cache-${{ runner.os }}-
+
+      # ======================================================
+      # 7. RENDER
+      # ======================================================
 
       - name: Render
-        id: render
-        shell: bash
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          set -e
 
-          echo "Starting render.py..."
+          echo "=========================================="
+          echo "START RENDER"
+          echo "=========================================="
+
           python render.py
 
-          echo
-          echo "Files produced by render.py:"
-          ls -lah frame*.png 2>/dev/null || true
+      # ======================================================
+      # 8. FINAL FILE CHECK
+      # ======================================================
 
-      - name: Validate exactly 12 frames
-        id: validate_frames
-        shell: bash
+      - name: Validate output
         run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          set -e
 
-          echo "Checking frame1.png ... frame12.png"
+          echo "=========================================="
+          echo "VALIDATING OUTPUT"
+          echo "=========================================="
 
-          # Check that every required frame exists and is a regular file.
-          for i in $(seq 1 12); do
-            file="frame${i}.png"
+          test -f output/video.mp4
+          test -s output/video.mp4
 
-            if [ ! -f "$file" ]; then
-              echo "::error::Missing required file: $file"
-              exit 1
-            fi
+          echo ""
+          echo "Video:"
+          ls -lh output/video.mp4
 
-            if [ ! -s "$file" ]; then
-              echo "::error::$file exists but is empty."
-              exit 1
-            fi
-
-            echo "OK: $file ($(stat -c%s "$file") bytes)"
-          done
-
-          # Reject a broken/non-PNG file before FFmpeg is called.
-          python - <<'PY'
-          from pathlib import Path
-          from PIL import Image
-
-          expected = [Path(f"frame{i}.png") for i in range(1, 13)]
-
-          sizes = set()
-
-          for path in expected:
-              try:
-                  with Image.open(path) as im:
-                      im.verify()
-                  with Image.open(path) as im:
-                      im.load()
-                      if im.format != "PNG":
-                          raise ValueError(f"format is {im.format}, not PNG")
-                      if im.width <= 0 or im.height <= 0:
-                          raise ValueError("invalid dimensions")
-                      sizes.add((im.width, im.height))
-                      print(f"VALID {path}: PNG {im.width}x{im.height}")
-              except Exception as exc:
-                  raise SystemExit(f"INVALID {path}: {exc}")
-
-          if len(sizes) != 1:
-              raise SystemExit(f"Frames do not have identical dimensions: {sorted(sizes)}")
-
-          print(f"All 12 frames are valid PNGs with identical dimensions: {sorted(sizes)[0]}")
-          PY
-
-          # Ensure there are no missing numbers in the exact sequence.
-          expected_count=12
-          actual_count=$(find . -maxdepth 1 -type f -name 'frame*.png' | wc -l)
-
-          if [ "$actual_count" -ne "$expected_count" ]; then
-            echo "::error::Expected exactly 12 frame*.png files in workspace, found $actual_count."
-            find . -maxdepth 1 -type f -name 'frame*.png' -print | sort
-            exit 1
-          fi
-
-          echo "Frame validation passed. Make Video is allowed to run."
-
-      - name: Make Video
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-
-          # This step can only be reached if Validate exactly 12 frames
-          # completed successfully.
-          for i in $(seq 1 12); do
-            test -s "frame${i}.png" || {
-              echo "::error::frame${i}.png disappeared before FFmpeg."
-              exit 1
-            }
-          done
-
-          echo "Creating 60-second video from exactly frame1.png through frame12.png..."
-
-          ffmpeg \
-            -y \
-            -hide_banner \
-            -loglevel error \
-            -f image2 \
-            -framerate 0.2 \
-            -start_number 1 \
-            -start_number_range 1 \
-            -i "frame%d.png" \
-            -frames:v 12 \
-            -c:v libx264 \
-            -preset veryfast \
-            -crf 23 \
-            -pix_fmt yuv420p \
-            -movflags +faststart \
-            -an \
-            "video.mp4"
-
-          test -s video.mp4 || {
-            echo "::error::FFmpeg finished but video.mp4 was not created."
-            exit 1
-          }
-
-          echo "Video created successfully:"
-          ls -lh video.mp4
-
-          echo
-          echo "FFmpeg output verification:"
+          echo ""
+          echo "FFprobe:"
           ffprobe \
             -v error \
-            -select_streams v:0 \
-            -show_entries stream=width,height,nb_frames,r_frame_rate,duration \
-            -of default=noprint_wrappers=1 \
-            video.mp4
+            -show_entries \
+            format=duration \
+            -show_entries \
+            stream=codec_type \
+            -of json \
+            output/video.mp4
 
-      - name: Upload video and frames
-        if: ${{ success() }}
+      # ======================================================
+      # 9. UPLOAD
+      # ======================================================
+
+      - name: Upload final video
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-video-output
+          name: ai-video-${{ github.run_number }}
           path: |
-            video.mp4
-            frame1.png
-            frame2.png
-            frame3.png
-            frame4.png
-            frame5.png
-            frame6.png
-            frame7.png
-            frame8.png
-            frame9.png
-            frame10.png
-            frame11.png
-            frame12.png
+            output/video.mp4
+            output/scenes/*.png
+            output/audio/*.wav
           if-no-files-found: error
           retention-days: 7
-          
+
+      # ======================================================
+      # 10. FAILURE DEBUG
+      # ======================================================
+
+      - name: Upload debug output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-video-debug-${{ github.run_number }}
+          path: |
+            output/
+            cache/
+            assets/story.json
+          if-no-files-found: ignore
+          retention-days: 3
