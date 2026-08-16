@@ -1,23 +1,37 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="UTF-8">
 <title>AI Video Maker</title>
+<style>
+body{font-family:Arial;padding:20px;background:#111;color:#fff}
+textarea{width:100%;height:120px}
+button{width:100%;padding:14px;background:#6C5CE7;color:#fff;border:0}
+#log{margin-top:15px}
+</style>
 </head>
 <body>
-<h1>AI Video Maker</h1>
-
-<input id="prompt" placeholder="Nhập ý tưởng video">
-
-<button onclick="taoVideo()">
-Tạo Video
-</button>
-
+<h2>🎬 AI Video Maker</h2>
+<textarea id="prompt" placeholder="Miu và Bống chơi trong rừng..."></textarea>
+<button onclick="tao()">Tạo video</button>
+<p id="log"></p>
 <script>
-function taoVideo(){
-  let p=document.getElementById("prompt").value;
-  alert("Đã nhận: "+p);
+async function tao(){
+let p=document.getElementById("prompt").value;
+document.getElementById("log").innerText="Đang gửi...";
+await fetch("https://api.github.com/repos/TranNguyenn07/Video-Ai-Maker/dispatches",{
+method:"POST",
+headers:{
+"Accept":"application/vnd.github+json",
+"Authorization":"Bearer YOUR_TOKEN"
+},
+body:JSON.stringify({
+event_type:"create_video",
+client_payload:{prompt:p}
+})
+});
+document.getElementById("log").innerText="Đã gửi yêu cầu!";
 }
 </script>
-
 </body>
 </html>
