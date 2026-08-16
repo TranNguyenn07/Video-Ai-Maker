@@ -2,6 +2,11 @@ name: Video Bot
 
 on:
   workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Ý tưởng video"
+        required: true
+        type: string
 
 jobs:
   build:
@@ -14,18 +19,24 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install -r requirements.txt
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          sudo apt update
+          sudo apt install -y ffmpeg
 
-      - run: sudo apt update && sudo apt install -y ffmpeg
+      - name: Create prompt
+        run: echo "${{ github.event.inputs.prompt }}" > prompt.txt
 
-      - run: python render.py
+      - name: Render
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python render.py
 
-      - run: |
+      - name: Make video
+        run: |
           ffmpeg -y -framerate 0.1 -i frame%d.png \
-          -vf "zoompan=z='min(zoom+0.0015,1.15)':d=100:s=720x1280" \
-          -t 60 output.mp4
+          -t 60 -pix_fmt yuv420p output.mp4
 
       - uses: actions/upload-artifact@v4
         with:
