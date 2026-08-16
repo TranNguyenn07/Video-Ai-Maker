@@ -2,8 +2,6 @@ name: Video Bot
 
 on:
   workflow_dispatch:
-  repository_dispatch:
-    types: [create_video]
 
 jobs:
   build:
@@ -16,11 +14,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      - run: pip install pillow
+
+      - run: python render.py
+
       - run: |
-          echo "${{ github.event.client_payload.prompt }}" > prompt.txt
-          python render.py
+          ffmpeg -framerate 1 \
+          -i frame%d.png \
+          -c:v libx264 \
+          -pix_fmt yuv420p \
+          output.mp4
 
       - uses: actions/upload-artifact@v4
         with:
-          name: output
-          path: prompt.txt
+          name: video
+          path: output.mp4
