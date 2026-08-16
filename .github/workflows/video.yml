@@ -1,0 +1,11 @@
+name: Video Bot
+
+on:
+  repository_dispatch:
+    types: [create_video]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.client_payload.prompt }}"
