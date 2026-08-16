@@ -1,0 +1,15 @@
+{
+  "miu":{
+    "species":"fox",
+    "fur":"orange",
+    "scarf":"blue polka dot"
+  },
+  "bong":{
+    "species":"bunny",
+    "overall":"yellow"
+  },
+  "xoai":{
+    "species":"hedgehog",
+    "backpack":"green"
+  }
+}
