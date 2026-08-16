@@ -9,287 +9,190 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. SETUP PYTHON
-      # ============================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      # ============================================================
-      # 3. INSTALL DEPENDENCIES
-      # ============================================================
-            - name: Install FFmpeg and Python dependencies
+      - name: Install FFmpeg
+        shell: bash
         run: |
-          echo "Installing FFmpeg..."
-
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-
-          echo "Checking FFmpeg..."
-          which ffmpeg
           ffmpeg -version | head -n 1
 
-          echo "Installing Python dependencies..."
-          python -m pip install --upgrade pip
-
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+          else
+            python -m pip install --upgrade pip pillow
           fi
 
-          pip install pillow requests
-      # ============================================================
-      # 4. CLEAN OLD FRAMES
-      # ============================================================
       - name: Clean old frames
+        shell: bash
         run: |
-          echo "Cleaning old frames..."
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          rm -f frame1.png frame2.png frame3.png frame4.png frame5.png frame6.png
+          rm -f frame7.png frame8.png frame9.png frame10.png frame11.png frame12.png
+          rm -f video.mp4
+          rm -f render_manifest.json
+          echo "Old frame files removed."
 
-          rm -f frame1.png
-          rm -f frame2.png
-          rm -f frame3.png
-          rm -f frame4.png
-          rm -f frame5.png
-          rm -f frame6.png
-          rm -f frame7.png
-          rm -f frame8.png
-          rm -f frame9.png
-          rm -f frame10.png
-          rm -f frame11.png
-          rm -f frame12.png
-
-          rm -rf frames
-
-          mkdir -p frames
-
-          echo "Workspace:"
-          pwd
-          ls -la
-
-      # ============================================================
-      # 5. RENDER
-      # ============================================================
       - name: Render
+        id: render
+        shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "=========================================="
-          echo "START RENDER"
-          echo "=========================================="
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
 
-          if [ ! -f render.py ]; then
-            echo "ERROR: render.py not found"
-            exit 1
-          fi
-
+          echo "Starting render.py..."
           python render.py
 
-          echo ""
-          echo "=========================================="
-          echo "FILES AFTER RENDER"
-          echo "=========================================="
+          echo
+          echo "Files produced by render.py:"
+          ls -lah frame*.png 2>/dev/null || true
 
-          find . -maxdepth 3 -type f \
-            \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" \) \
-            -print | sort
-
-      # ============================================================
-      # 6. NORMALIZE FRAME LOCATION
-      # ============================================================
-      - name: Normalize frames
-        run: |
-          echo "=========================================="
-          echo "SEARCHING FOR GENERATED FRAMES"
-          echo "=========================================="
-
-          found=0
-
-          for i in $(seq 1 12); do
-
-            # Already in workspace root
-            if [ -f "frame${i}.png" ]; then
-              echo "Found root frame${i}.png"
-              found=$((found + 1))
-              continue
-            fi
-
-            # In ./frames/
-            if [ -f "frames/frame${i}.png" ]; then
-              echo "Found frames/frame${i}.png"
-              cp "frames/frame${i}.png" "frame${i}.png"
-              found=$((found + 1))
-              continue
-            fi
-
-            # Search deeper in workspace
-            result=$(find . -type f -name "frame${i}.png" \
-              -not -path "./.git/*" \
-              | head -n 1)
-
-            if [ -n "$result" ]; then
-              echo "Found frame${i}.png at:"
-              echo "$result"
-
-              cp "$result" "frame${i}.png"
-
-              found=$((found + 1))
-            fi
-
-          done
-
-          echo ""
-          echo "Normalized frames: $found / 12"
-
-          echo ""
-          echo "Root directory:"
-          ls -lah
-
-      # ============================================================
-      # 7. VALIDATE EXACTLY 12 FRAMES
-      # ============================================================
       - name: Validate exactly 12 frames
+        id: validate_frames
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
 
-          echo "=========================================="
-          echo "VALIDATING FRAME FILES"
-          echo "=========================================="
+          echo "Checking frame1.png ... frame12.png"
 
-          missing=0
-          invalid=0
-
+          # Check that every required frame exists and is a regular file.
           for i in $(seq 1 12); do
-
             file="frame${i}.png"
 
-            echo ""
-            echo "Checking ${file} ..."
-
             if [ ! -f "$file" ]; then
-              echo "ERROR: Missing required file: $file"
-              missing=1
-              continue
+              echo "::error::Missing required file: $file"
+              exit 1
             fi
 
-            size=$(stat -c%s "$file")
-
-            echo "Size: ${size} bytes"
-
-            if [ "$size" -le 100 ]; then
-              echo "ERROR: $file is empty or too small"
-              invalid=1
-              continue
+            if [ ! -s "$file" ]; then
+              echo "::error::$file exists but is empty."
+              exit 1
             fi
 
-            file_type=$(file -b "$file")
-
-            echo "Type: $file_type"
-
-            if ! echo "$file_type" | grep -qi "PNG image data"; then
-              echo "ERROR: $file is not a valid PNG"
-              invalid=1
-              continue
-            fi
-
-            echo "OK: $file"
-
+            echo "OK: $file ($(stat -c%s "$file") bytes)"
           done
 
-          echo ""
-          echo "=========================================="
-          echo "VALIDATION RESULT"
-          echo "=========================================="
+          # Reject a broken/non-PNG file before FFmpeg is called.
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
 
-          if [ "$missing" -ne 0 ]; then
-            echo "ERROR: One or more frames are missing."
+          expected = [Path(f"frame{i}.png") for i in range(1, 13)]
+
+          sizes = set()
+
+          for path in expected:
+              try:
+                  with Image.open(path) as im:
+                      im.verify()
+                  with Image.open(path) as im:
+                      im.load()
+                      if im.format != "PNG":
+                          raise ValueError(f"format is {im.format}, not PNG")
+                      if im.width <= 0 or im.height <= 0:
+                          raise ValueError("invalid dimensions")
+                      sizes.add((im.width, im.height))
+                      print(f"VALID {path}: PNG {im.width}x{im.height}")
+              except Exception as exc:
+                  raise SystemExit(f"INVALID {path}: {exc}")
+
+          if len(sizes) != 1:
+              raise SystemExit(f"Frames do not have identical dimensions: {sorted(sizes)}")
+
+          print(f"All 12 frames are valid PNGs with identical dimensions: {sorted(sizes)[0]}")
+          PY
+
+          # Ensure there are no missing numbers in the exact sequence.
+          expected_count=12
+          actual_count=$(find . -maxdepth 1 -type f -name 'frame*.png' | wc -l)
+
+          if [ "$actual_count" -ne "$expected_count" ]; then
+            echo "::error::Expected exactly 12 frame*.png files in workspace, found $actual_count."
+            find . -maxdepth 1 -type f -name 'frame*.png' -print | sort
             exit 1
           fi
 
-          if [ "$invalid" -ne 0 ]; then
-            echo "ERROR: One or more frames are invalid."
-            exit 1
-          fi
+          echo "Frame validation passed. Make Video is allowed to run."
 
-          count=$(find . -maxdepth 1 -type f -name 'frame*.png' | wc -l)
-
-          echo "Valid root PNG frames: $count"
-
-          if [ "$count" -ne 12 ]; then
-            echo "ERROR: Expected exactly 12 frame PNG files."
-            exit 1
-          fi
-
-          echo ""
-          echo "SUCCESS: Exactly 12 valid frames are ready."
-
-      # ============================================================
-      # 8. MAKE VIDEO
-      # ============================================================
       - name: Make Video
-        if: success()
+        if: ${{ success() }}
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
 
-          echo "=========================================="
-          echo "MAKE VIDEO"
-          echo "=========================================="
-
-          echo "Checking FFmpeg..."
-          ffmpeg -version | head -n 1
-
-          echo ""
-          echo "Input files:"
-
+          # This step can only be reached if Validate exactly 12 frames
+          # completed successfully.
           for i in $(seq 1 12); do
-            ls -lh "frame${i}.png"
+            test -s "frame${i}.png" || {
+              echo "::error::frame${i}.png disappeared before FFmpeg."
+              exit 1
+            }
           done
 
-          echo ""
-          echo "Creating video..."
-
-          rm -f video.mp4
+          echo "Creating 60-second video from exactly frame1.png through frame12.png..."
 
           ffmpeg \
             -y \
-            -framerate 2 \
+            -hide_banner \
+            -loglevel error \
+            -f image2 \
+            -framerate 0.2 \
             -start_number 1 \
+            -start_number_range 1 \
             -i "frame%d.png" \
             -frames:v 12 \
             -c:v libx264 \
+            -preset veryfast \
+            -crf 23 \
             -pix_fmt yuv420p \
             -movflags +faststart \
-            video.mp4
+            -an \
+            "video.mp4"
 
-          echo ""
-          echo "=========================================="
-          echo "VIDEO CREATED"
-          echo "=========================================="
+          test -s video.mp4 || {
+            echo "::error::FFmpeg finished but video.mp4 was not created."
+            exit 1
+          }
 
+          echo "Video created successfully:"
           ls -lh video.mp4
 
-          if [ ! -s video.mp4 ]; then
-            echo "ERROR: video.mp4 was not created"
-            exit 1
-          fi
+          echo
+          echo "FFmpeg output verification:"
+          ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=width,height,nb_frames,r_frame_rate,duration \
+            -of default=noprint_wrappers=1 \
+            video.mp4
 
-      # ============================================================
-      # 9. UPLOAD VIDEO + FRAMES
-      # ============================================================
       - name: Upload video and frames
-        if: success()
+        if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
-          name: ai-video-result
+          name: ai-video-output
           path: |
             video.mp4
             frame1.png
@@ -305,3 +208,4 @@ jobs:
             frame11.png
             frame12.png
           if-no-files-found: error
+          retention-days: 7
