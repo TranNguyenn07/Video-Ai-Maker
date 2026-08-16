@@ -1,7 +1,12 @@
-from PIL import Image, ImageDraw
+import requests, os
 
-for i in range(1,6):
-    img=Image.new("RGB",(720,1280),(135,206,235))
-    d=ImageDraw.Draw(img)
-    d.text((40,80),f"Scene {i}",fill="white")
-    img.save(f"frame{i}.png")
+PROMPT = open("prompt.txt","r",encoding="utf-8").read()
+API = os.environ["HF_TOKEN"]
+
+r = requests.post(
+    "https://router.huggingface.co/fal-ai/fal-ai/flux/schnell",
+    headers={"Authorization": f"Bearer {API}"},
+    json={"prompt": PROMPT}
+)
+
+print(r.json())
