@@ -8,24 +8,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - run: pip install pillow
+      - name: Install packages
+        run: |
+          pip install pillow requests
 
-      - run: python render.py
+      - name: Run render
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python render.py
 
-      - run: |
-          ffmpeg -framerate 1 \
-          -i frame%d.png \
-          -c:v libx264 \
-          -pix_fmt yuv420p \
-          output.mp4
+      - name: Create MP4
+        run: |
+          ffmpeg -y -framerate 1 -i frame%d.png \
+          -c:v libx264 -pix_fmt yuv420p output.mp4
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload video
+        uses: actions/upload-artifact@v4
         with:
           name: video
           path: output.mp4
