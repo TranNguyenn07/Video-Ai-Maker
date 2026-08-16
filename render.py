@@ -1,1436 +1,922 @@
+import hashlib
 import json
-import math
 import os
-import random
+import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+import requests
+from PIL import Image
 
 
-# ============================================================
-# AI VIDEO MAKER - RENDER ONLY
-# ------------------------------------------------------------
-# This file intentionally DOES NOT call FFmpeg.
-# It creates exactly:
-#   frame1.png ... frame12.png
-# in the repository root.
-#
-# Video creation is handled by .github/workflows/video.yml.
-# ============================================================
+ROOT = Path(__file__).resolve().parent
+
+STORY_FILE = ROOT / "assets" / "story.json"
+CHAR_FILE = ROOT / "assets" / "characters" / "characters.json"
+
+MIU_REF = ROOT / "assets" / "characters" / "miu.png"
+BONG_REF = ROOT / "assets" / "characters" / "bong.png"
+
+CACHE_IMAGES = ROOT / "cache" / "images"
+CACHE_TTS = ROOT / "cache" / "tts"
+
+OUTPUT = ROOT / "output"
+SCENES = OUTPUT / "scenes"
+AUDIO = OUTPUT / "audio"
+
+VIDEO = OUTPUT / "video.mp4"
+
+IMAGE_MODEL = "gpt-image-1"
+
+MIN_SCENES = 12
+MAX_SCENES = 18
+
+MIN_VIDEO_SECONDS = 60
+MAX_VIDEO_SECONDS = 90
 
 WIDTH = 1080
 HEIGHT = 1920
 
-TOTAL_SECONDS = 60
-SCENE_COUNT = 12
-SCENE_SECONDS = TOTAL_SECONDS / SCENE_COUNT
+FPS = 30
 
-BASE_DIR = Path(__file__).resolve().parent
-CHAR_JSON = BASE_DIR / "char.json"
 
-# The workflow expects the frames in the repository root.
-FRAME_DIR = BASE_DIR
+# ============================================================
+# BASIC
+# ============================================================
 
-# Keep a second copy for inspection/artifacts.
-OUTPUT_DIR = BASE_DIR / "output" / "frames"
+def fail(message):
+    print("\n" + "=" * 70)
+    print("RENDER FAILED")
+    print("=" * 70)
+    print(message)
+    print("=" * 70)
+    sys.exit(1)
 
-VIDEO_PROMPT = (
-    os.environ.get("VIDEO_PROMPT", "").strip()
-    or os.environ.get("INPUT_PROMPT", "").strip()
-    or (
-        "Miu và Bống tìm thấy một chú chim non bị lạc trong khu rừng "
-        "và cùng nhau giúp chú chim trở về với mẹ."
+
+def run(command):
+    print("$", " ".join(str(x) for x in command))
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
     )
-)
+
+    print(result.stdout)
+
+    if result.returncode != 0:
+        fail(
+            "Command failed with exit code "
+            f"{result.returncode}"
+        )
 
 
-# ============================================================
-# EXACT CHARACTER DATA
-# ------------------------------------------------------------
-# char.json is read when present so the project keeps one
-# character source of truth. The renderer never asks an AI to
-# invent/restyle these characters.
-# ============================================================
-
-CHARACTER_FALLBACK = {
-    "CHAR_01": {
-        "name": "Miu",
-        "description": (
-            "Miu, a small round fox kit with bright orange fur, a pure "
-            "white belly and white-tipped tail, big round expressive eyes, "
-            "large fluffy ears with white fur tips, two small white fur "
-            "streaks on both cheeks, wearing a pastel sky-blue scarf with "
-            "small white polka dots tied around the neck. Child-like "
-            "proportions, 3D animated movie style, extremely cute and "
-            "expressive. This exact character design must be used."
-        ),
-    },
-    "CHAR_02": {
-        "name": "Bống",
-        "description": (
-            "Bống, a small rabbit kit with cream-white fur, long upright "
-            "ears with pale pink inner ears, the left ear slightly drooping, "
-            "wearing a pale butter-yellow overall, with a small pale pink "
-            "flower tucked behind the left ear. Child-like proportions, "
-            "3D animated movie style, soft and gentle design. This exact "
-            "character design must be used."
-        ),
-    },
-}
+def require_command(command):
+    if shutil.which(command) is None:
+        fail(
+            f"Không tìm thấy command: {command}"
+        )
 
 
-def load_characters():
-    """
-    Load character definitions from char.json if available.
-
-    Supported forms:
-      {
-        "CHAR_01": {...},
-        "CHAR_02": {...}
-      }
-
-    or:
-      {
-        "characters": {
-          "CHAR_01": {...},
-          "CHAR_02": {...}
-        }
-      }
-
-    If char.json is absent or malformed, the exact built-in definitions
-    above are used so rendering remains deterministic.
-    """
-    if not CHAR_JSON.exists():
-        return CHARACTER_FALLBACK.copy()
+def load_json(path):
+    if not path.exists():
+        fail(
+            f"Không tìm thấy: {path}"
+        )
 
     try:
-        data = json.loads(CHAR_JSON.read_text(encoding="utf-8"))
-
-        if isinstance(data, dict) and isinstance(
-            data.get("characters"), dict
-        ):
-            data = data["characters"]
-
-        if not isinstance(data, dict):
-            raise ValueError("char.json must contain a JSON object")
-
-        result = {}
-
-        for key in ("CHAR_01", "CHAR_02"):
-            value = data.get(key)
-
-            if isinstance(value, dict):
-                fallback = CHARACTER_FALLBACK[key].copy()
-                fallback.update(value)
-                result[key] = fallback
-            else:
-                result[key] = CHARACTER_FALLBACK[key].copy()
-
-        return result
-
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as f:
+            return json.load(f)
     except Exception as exc:
-        print(
-            f"WARNING: Could not read char.json: {exc}",
-            file=sys.stderr,
+        fail(
+            f"JSON lỗi {path}: {exc}"
         )
-        print("Using exact built-in character definitions.")
 
 
-        return CHARACTER_FALLBACK.copy()
+def sha256_text(value):
+    return hashlib.sha256(
+        value.encode("utf-8")
+    ).hexdigest()
 
 
-CHARACTERS = load_characters()
+def sha256_file(path):
+    h = hashlib.sha256()
+
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+
+            if not chunk:
+                break
+
+            h.update(chunk)
+
+    return h.hexdigest()
 
 
 # ============================================================
-# FONTS
+# IMAGE VALIDATION
 # ============================================================
 
-def get_font(size, bold=False):
-    candidates = []
-
-    if bold:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        ]
-    else:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        ]
-
-    for path in candidates:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
-
-    return ImageFont.load_default()
-
-
-FONT_SCENE = get_font(54, True)
-FONT_TEXT = get_font(37, False)
-FONT_SMALL = get_font(28, False)
-
-
-# ============================================================
-# STORY
-# ============================================================
-
-def make_story(topic):
-    """
-    Deterministic 12-scene story.
-
-    No external AI API is called.
-    """
-
-    return [
-        (
-            "Buổi sáng trong khu rừng nhỏ, Miu và Bống đang vui chơi "
-            f"thì phát hiện ra rằng {topic}"
-        ),
-        (
-            "Miu nhìn quanh khu rừng thật kỹ và nhận ra có điều gì "
-            "đó không ổn."
-        ),
-        (
-            "Bống bước lại gần Miu và hỏi xem hai người bạn có thể "
-            "làm gì để giúp đỡ."
-        ),
-        (
-            "Miu lắng nghe thật chăm chú và nghe thấy một âm thanh "
-            "rất nhỏ ở phía xa."
-        ),
-        (
-            "Hai người bạn quyết định đi theo con đường nhỏ xuyên "
-            "qua khu rừng."
-        ),
-        (
-            "Bống phát hiện một vài dấu vết bé xíu trên mặt đất "
-            "phủ đầy lá."
-        ),
-        (
-            "Hai người bạn gặp một chú chim non nhỏ đang lo lắng "
-            "vì không thể tìm thấy mẹ."
-        ),
-        (
-            "Miu nhẹ nhàng an ủi chú chim, còn Bống nhìn quanh để "
-            "tìm dấu hiệu của chim mẹ."
-        ),
-        (
-            "Hai người bạn cùng đưa chú chim non đến gần một cái "
-            "cây lớn và tìm thấy chiếc tổ."
-        ),
-        (
-            "Từ trên cao, một tiếng chim quen thuộc vang lên và "
-            "chú chim non vui mừng khi nhìn thấy mẹ."
-        ),
-        (
-            "Miu và Bống mỉm cười vì đã giúp được một người bạn "
-            "nhỏ trở về với gia đình."
-        ),
-        (
-            "Hai người bạn cùng trở về nhà và hiểu rằng một việc "
-            "tốt dù nhỏ cũng có thể làm một ngày trở nên thật đẹp."
-        ),
-    ]
-
-
-# ============================================================
-# TEXT WRAP
-# ============================================================
-
-def wrap_text(draw, text, font, max_width):
-    words = text.split()
-    lines = []
-    current = ""
-
-    for word in words:
-        candidate = word if not current else current + " " + word
-
-        bbox = draw.textbbox(
-            (0, 0),
-            candidate,
-            font=font,
+def validate_png(path, label):
+    if not path.exists():
+        fail(
+            f"{label} không tồn tại: {path}"
         )
 
-        width = bbox[2] - bbox[0]
-
-        if width <= max_width:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-
-            current = word
-
-    if current:
-        lines.append(current)
-
-    return lines
-
-
-# ============================================================
-# DRAW HELPERS
-# ============================================================
-
-def gradient_background(draw, top, bottom):
-    for y in range(HEIGHT):
-        t = y / float(HEIGHT - 1)
-
-        color = tuple(
-            int(top[i] + (bottom[i] - top[i]) * t)
-            for i in range(3)
-        )
-
-        draw.line(
-            (0, y, WIDTH, y),
-            fill=color,
-        )
-
-
-def draw_cloud(draw, x, y, scale=1.0):
-    color = (250, 253, 255)
-
-    for dx, dy, radius in [
-        (-80, 15, 55),
-        (0, -15, 75),
-        (80, 15, 55),
-    ]:
-        cx = int(x + dx * scale)
-        cy = int(y + dy * scale)
-        r = int(radius * scale)
-
-        draw.ellipse(
-            (
-                cx - r,
-                cy - r,
-                cx + r,
-                cy + r,
-            ),
-            fill=color,
-        )
-
-
-def draw_tree(draw, x, y, scale=1.0):
-    trunk_w = int(60 * scale)
-    trunk_h = int(270 * scale)
-
-    draw.rounded_rectangle(
-        (
-            x - trunk_w // 2,
-            y,
-            x + trunk_w // 2,
-            y + trunk_h,
-        ),
-        radius=max(1, int(18 * scale)),
-        fill=(110, 75, 48),
-    )
-
-    for dx, dy, radius in [
-        (-90, -30, 100),
-        (0, -90, 125),
-        (95, -20, 95),
-        (20, 20, 105),
-    ]:
-        cx = int(x + dx * scale)
-        cy = int(y + dy * scale)
-        r = int(radius * scale)
-
-        draw.ellipse(
-            (
-                cx - r,
-                cy - r,
-                cx + r,
-                cy + r,
-            ),
-            fill=(84, 154, 91),
-        )
-
-
-def draw_bird(draw, x, y, scale=1.0):
-    body = (221, 170, 86)
-    wing = (194, 139, 65)
-    dark = (40, 35, 30)
-    beak = (230, 165, 58)
-
-    rx = int(48 * scale)
-    ry = int(35 * scale)
-
-    draw.ellipse(
-        (
-            x - rx,
-            y - ry,
-            x + rx,
-            y + ry,
-        ),
-        fill=body,
-    )
-
-    draw.ellipse(
-        (
-            x - int(5 * scale),
-            y - int(10 * scale),
-            x + int(45 * scale),
-            y + int(25 * scale),
-        ),
-        fill=wing,
-    )
-
-    eye_r = max(2, int(6 * scale))
-    eye_x = x + int(18 * scale)
-    eye_y = y - int(15 * scale)
-
-    draw.ellipse(
-        (
-            eye_x - eye_r,
-            eye_y - eye_r,
-            eye_x + eye_r,
-            eye_y + eye_r,
-        ),
-        fill=dark,
-    )
-
-    draw.polygon(
-        [
-            (
-                x + int(47 * scale),
-                y,
-            ),
-            (
-                x + int(75 * scale),
-                y + int(9 * scale),
-            ),
-            (
-                x + int(47 * scale),
-                y + int(18 * scale),
-            ),
-        ],
-        fill=beak,
-    )
-
-
-# ============================================================
-# MIU - EXACT DESIGN
-# ============================================================
-
-def draw_miu(draw, cx, cy, scale=1.0, emotion="happy"):
-    orange = (239, 119, 47)
-    orange_light = (255, 145, 60)
-    white = (255, 250, 242)
-    dark = (55, 38, 32)
-
-    scarf = (151, 205, 230)
-    scarf_dot = (248, 252, 255)
-
-    # Ground shadow
-    draw.ellipse(
-        (
-            cx - int(170 * scale),
-            cy + int(260 * scale),
-            cx + int(170 * scale),
-            cy + int(320 * scale),
-        ),
-        fill=(50, 60, 50),
-    )
-
-    # White-tipped tail
-    tx = cx + int(150 * scale)
-    ty = cy + int(145 * scale)
-
-    draw.ellipse(
-        (
-            tx - int(120 * scale),
-            ty - int(80 * scale),
-            tx + int(100 * scale),
-            ty + int(100 * scale),
-        ),
-        fill=orange_light,
-    )
-
-    draw.ellipse(
-        (
-            tx + int(35 * scale),
-            ty - int(30 * scale),
-            tx + int(105 * scale),
-            ty + int(85 * scale),
-        ),
-        fill=white,
-    )
-
-    # Round body
-    draw.ellipse(
-        (
-            cx - int(150 * scale),
-            cy - int(30 * scale),
-            cx + int(150 * scale),
-            cy + int(290 * scale),
-        ),
-        fill=orange,
-    )
-
-    # Pure white belly
-    draw.ellipse(
-        (
-            cx - int(92 * scale),
-            cy + int(70 * scale),
-            cx + int(92 * scale),
-            cy + int(255 * scale),
-        ),
-        fill=white,
-    )
-
-    # Large fluffy ears
-    draw.polygon(
-        [
-            (
-                cx - int(115 * scale),
-                cy - int(80 * scale),
-            ),
-            (
-                cx - int(150 * scale),
-                cy - int(260 * scale),
-            ),
-            (
-                cx - int(35 * scale),
-                cy - int(165 * scale),
-            ),
-        ],
-        fill=orange,
-    )
-
-    draw.polygon(
-        [
-            (
-                cx + int(35 * scale),
-                cy - int(165 * scale),
-            ),
-            (
-                cx + int(150 * scale),
-                cy - int(260 * scale),
-            ),
-            (
-                cx + int(115 * scale),
-                cy - int(80 * scale),
-            ),
-        ],
-        fill=orange,
-    )
-
-    # White ear tips
-    draw.polygon(
-        [
-            (
-                cx - int(105 * scale),
-                cy - int(125 * scale),
-            ),
-            (
-                cx - int(130 * scale),
-                cy - int(225 * scale),
-            ),
-            (
-                cx - int(55 * scale),
-                cy - int(165 * scale),
-            ),
-        ],
-        fill=white,
-    )
-
-    draw.polygon(
-        [
-            (
-                cx + int(55 * scale),
-                cy - int(165 * scale),
-            ),
-            (
-                cx + int(130 * scale),
-                cy - int(225 * scale),
-            ),
-            (
-                cx + int(105 * scale),
-                cy - int(125 * scale),
-            ),
-        ],
-        fill=white,
-    )
-
-    # Head
-    draw.ellipse(
-        (
-            cx - int(160 * scale),
-            cy - int(175 * scale),
-            cx + int(160 * scale),
-            cy + int(120 * scale),
-        ),
-        fill=orange_light,
-    )
-
-    # Two white cheek streaks
-    draw.rounded_rectangle(
-        (
-            cx - int(118 * scale),
-            cy + int(10 * scale),
-            cx - int(72 * scale),
-            cy + int(24 * scale),
-        ),
-        radius=max(2, int(7 * scale)),
-        fill=white,
-    )
-
-    draw.rounded_rectangle(
-        (
-            cx + int(72 * scale),
-            cy + int(10 * scale),
-            cx + int(118 * scale),
-            cy + int(24 * scale),
-        ),
-        radius=max(2, int(7 * scale)),
-        fill=white,
-    )
-
-    # Large expressive eyes
-    eye_y = cy - int(60 * scale)
-
-    for ex in (
-        cx - int(62 * scale),
-        cx + int(62 * scale),
-    ):
-        r = int(39 * scale)
-
-        draw.ellipse(
-            (
-                ex - r,
-                eye_y - r,
-                ex + r,
-                eye_y + r,
-            ),
-            fill=white,
-        )
-
-        r2 = int(22 * scale)
-
-        draw.ellipse(
-            (
-                ex - r2,
-                eye_y - r2,
-                ex + r2,
-                eye_y + r2,
-            ),
-            fill=dark,
-        )
-
-        draw.ellipse(
-            (
-                ex - int(8 * scale),
-                eye_y - int(12 * scale),
-                ex + int(4 * scale),
-                eye_y,
-            ),
-            fill=white,
-        )
-
-    # Nose
-    draw.ellipse(
-        (
-            cx - int(28 * scale),
-            cy,
-            cx + int(28 * scale),
-            cy + int(38 * scale),
-        ),
-        fill=(90, 58, 48),
-    )
-
-    # Mouth
-    if emotion == "sad":
-        start_angle = 200
-        end_angle = 340
-    else:
-        start_angle = 20
-        end_angle = 160
-
-    draw.arc(
-        (
-            cx - int(35 * scale),
-            cy + int(15 * scale),
-            cx + int(35 * scale),
-            cy + int(75 * scale),
-        ),
-        start_angle,
-        end_angle,
-        fill=dark,
-        width=max(2, int(5 * scale)),
-    )
-
-    # Pastel sky-blue scarf
-    draw.rounded_rectangle(
-        (
-            cx - int(125 * scale),
-            cy + int(100 * scale),
-            cx + int(125 * scale),
-            cy + int(155 * scale),
-        ),
-        radius=max(1, int(25 * scale)),
-        fill=scarf,
-    )
-
-    # Small white polka dots
-    for dx in (-75, -25, 25, 75):
-        r = max(2, int(6 * scale))
-        x = cx + int(dx * scale)
-        y = cy + int(120 * scale)
-
-        draw.ellipse(
-            (
-                x - r,
-                y - r,
-                x + r,
-                y + r,
-            ),
-            fill=scarf_dot,
-        )
-
-
-# ============================================================
-# BỐNG - EXACT DESIGN
-# ============================================================
-
-def draw_bong(draw, cx, cy, scale=1.0):
-    cream = (247, 244, 226)
-    white = (255, 250, 237)
-    pink = (241, 177, 188)
-    yellow = (239, 218, 132)
-    dark = (62, 54, 48)
-
-    # Ground shadow
-    draw.ellipse(
-        (
-            cx - int(160 * scale),
-            cy + int(265 * scale),
-            cx + int(160 * scale),
-            cy + int(320 * scale),
-        ),
-        fill=(50, 60, 50),
-    )
-
-    # Body
-    draw.ellipse(
-        (
-            cx - int(145 * scale),
-            cy,
-            cx + int(145 * scale),
-            cy + int(290 * scale),
-        ),
-        fill=cream,
-    )
-
-    # Pale butter-yellow overall
-    draw.rounded_rectangle(
-        (
-            cx - int(115 * scale),
-            cy + int(100 * scale),
-            cx + int(115 * scale),
-            cy + int(300 * scale),
-        ),
-        radius=max(1, int(40 * scale)),
-        fill=yellow,
-    )
-
-    # Left ear: slightly drooping
-    draw.polygon(
-        [
-            (
-                cx - int(135 * scale),
-                cy - int(80 * scale),
-            ),
-            (
-                cx - int(175 * scale),
-                cy - int(255 * scale),
-            ),
-            (
-                cx - int(35 * scale),
-                cy - int(155 * scale),
-            ),
-        ],
-        fill=white,
-    )
-
-    # Right ear: upright
-    draw.rounded_rectangle(
-        (
-            cx + int(35 * scale),
-            cy - int(280 * scale),
-            cx + int(135 * scale),
-            cy - int(30 * scale),
-        ),
-        radius=max(1, int(45 * scale)),
-        fill=white,
-    )
-
-    # Pale pink inner ears
-    draw.polygon(
-        [
-            (
-                cx - int(115 * scale),
-                cy - int(110 * scale),
-            ),
-            (
-                cx - int(145 * scale),
-                cy - int(215 * scale),
-            ),
-            (
-                cx - int(58 * scale),
-                cy - int(155 * scale),
-            ),
-        ],
-        fill=pink,
-    )
-
-    draw.rounded_rectangle(
-        (
-            cx + int(58 * scale),
-            cy - int(255 * scale),
-            cx + int(112 * scale),
-            cy - int(60 * scale),
-        ),
-        radius=max(1, int(27 * scale)),
-        fill=pink,
-    )
-
-    # Head
-    draw.ellipse(
-        (
-            cx - int(160 * scale),
-            cy - int(180 * scale),
-            cx + int(160 * scale),
-            cy + int(115 * scale),
-        ),
-        fill=white,
-    )
-
-    # Eyes
-    eye_y = cy - int(62 * scale)
-
-    for ex in (
-        cx - int(62 * scale),
-        cx + int(62 * scale),
-    ):
-        r = int(37 * scale)
-
-        draw.ellipse(
-            (
-                ex - r,
-                eye_y - r,
-                ex + r,
-                eye_y + r,
-            ),
-            fill=white,
-        )
-
-        r2 = int(20 * scale)
-
-        draw.ellipse(
-            (
-                ex - r2,
-                eye_y - r2,
-                ex + r2,
-                eye_y + r2,
-            ),
-            fill=dark,
-        )
-
-        draw.ellipse(
-            (
-                ex - int(7 * scale),
-                eye_y - int(11 * scale),
-                ex + int(3 * scale),
-                eye_y,
-            ),
-            fill=white,
-        )
-
-    # Nose
-    draw.ellipse(
-        (
-            cx - int(18 * scale),
-            cy,
-            cx + int(18 * scale),
-            cy + int(25 * scale),
-        ),
-        fill=pink,
-    )
-
-    # Mouth
-    draw.arc(
-        (
-            cx - int(35 * scale),
-            cy + int(12 * scale),
-            cx + int(35 * scale),
-            cy + int(62 * scale),
-        ),
-        20,
-        160,
-        fill=dark,
-        width=max(2, int(5 * scale)),
-    )
-
-    # Small pale pink flower behind left ear
-    fx = cx - int(135 * scale)
-    fy = cy - int(175 * scale)
-
-    for angle in range(0, 360, 72):
-        rad = math.radians(angle)
-
-        px = fx + int(math.cos(rad) * 22 * scale)
-        py = fy + int(math.sin(rad) * 22 * scale)
-
-        r = int(15 * scale)
-
-        draw.ellipse(
-            (
-                px - r,
-                py - r,
-                px + r,
-                py + r,
-            ),
-            fill=pink,
-        )
-
-    r = int(10 * scale)
-
-    draw.ellipse(
-        (
-            fx - r,
-            fy - r,
-            fx + r,
-            fy + r,
-        ),
-        fill=(244, 196, 77),
-    )
-
-
-# ============================================================
-# SCENE
-# ============================================================
-
-def draw_scene(index, text):
-    random.seed(1000 + index)
-
-    image = Image.new(
-        "RGB",
-        (WIDTH, HEIGHT),
-        (220, 240, 220),
-    )
-
-    draw = ImageDraw.Draw(image)
-
-    palettes = [
-        ((170, 220, 247), (238, 250, 222)),
-        ((190, 225, 250), (239, 247, 219)),
-        ((155, 205, 240), (230, 244, 210)),
-        ((205, 230, 247), (246, 238, 205)),
-    ]
-
-    top, bottom = palettes[index % len(palettes)]
-
-    gradient_background(
-        draw,
-        top,
-        bottom,
-    )
-
-    # Sun
-    draw.ellipse(
-        (760, 120, 960, 320),
-        fill=(255, 232, 139),
-    )
-
-    # Clouds
-    draw_cloud(
-        draw,
-        210,
-        280,
-        0.9,
-    )
-
-    draw_cloud(
-        draw,
-        820,
-        430,
-        0.65,
-    )
-
-    # Distant hills
-    draw.polygon(
-        [
-            (0, 1000),
-            (180, 850),
-            (360, 980),
-            (550, 820),
-            (760, 970),
-            (930, 830),
-            (1080, 970),
-            (1080, 1300),
-            (0, 1300),
-        ],
-        fill=(126, 181, 122),
-    )
-
-    # Ground
-    draw.rectangle(
-        (0, 1200, WIDTH, HEIGHT),
-        fill=(133, 184, 104),
-    )
-
-    # Path
-    draw.polygon(
-        [
-            (420, HEIGHT),
-            (660, HEIGHT),
-            (585, 1190),
-            (495, 1190),
-        ],
-        fill=(218, 190, 142),
-    )
-
-    # Trees
-    draw_tree(
-        draw,
-        130,
-        820,
-        0.95,
-    )
-
-    draw_tree(
-        draw,
-        930,
-        850,
-        0.85,
-    )
-
-    if index % 3 == 0:
-        draw_tree(
-            draw,
-            530,
-            900,
-            0.65,
-        )
-
-    # Flowers
-    for _ in range(25):
-        x = random.randint(
-            20,
-            WIDTH - 20,
-        )
-
-        y = random.randint(
-            1260,
-            HEIGHT - 80,
-        )
-
-        r = random.randint(
-            3,
-            7,
-        )
-
-        draw.ellipse(
-            (
-                x - r,
-                y - r,
-                x + r,
-                y + r,
-            ),
-            fill=(255, 245, 210),
-        )
-
-    # Character positions
-    positions = [
-        (380, 1060, 690, 1080),
-        (330, 1050, 720, 1080),
-        (420, 1070, 760, 1080),
-        (360, 1060, 690, 1090),
-    ]
-
-    miu_x, miu_y, bong_x, bong_y = positions[
-        index % len(positions)
-    ]
-
-    # Story progression
-    emotion = "sad" if index in (6, 7, 8) else "happy"
-
-    draw_miu(
-        draw,
-        miu_x,
-        miu_y,
-        1.0,
-        emotion,
-    )
-
-    draw_bong(
-        draw,
-        bong_x,
-        bong_y,
-        0.92,
-    )
-
-    # Bird appears from scene 7 onward.
-    if index >= 6:
-        draw_bird(
-            draw,
-            790,
-            970,
-            0.75,
-        )
-
-    # Nest appears during rescue/reunion.
-    if index >= 7:
-        draw.ellipse(
-            (770, 990, 980, 1070),
-            fill=(125, 86, 50),
-        )
-
-        draw.ellipse(
-            (800, 1000, 950, 1050),
-            fill=(235, 216, 165),
-        )
-
-    # Scene number
-    draw.text(
-        (65, 55),
-        f"{index + 1:02d}/{SCENE_COUNT:02d}",
-        font=FONT_SCENE,
-        fill=(255, 255, 255),
-    )
-
-    # Vietnamese subtitle card
-    card_x1 = 55
-    card_y1 = HEIGHT - 390
-    card_x2 = WIDTH - 55
-    card_y2 = HEIGHT - 55
-
-    draw.rounded_rectangle(
-        (
-            card_x1,
-            card_y1,
-            card_x2,
-            card_y2,
-        ),
-        radius=35,
-        fill=(255, 255, 255),
-    )
-
-    lines = wrap_text(
-        draw,
-        text,
-        FONT_TEXT,
-        (card_x2 - card_x1) - 70,
-    )
-
-    line_height = 50
-    total_height = len(lines) * line_height
-
-    y = (
-        card_y1
-        + (
-            (card_y2 - card_y1)
-            - total_height
-        ) // 2
-    )
-
-    for line in lines:
-        bbox = draw.textbbox(
-            (0, 0),
-            line,
-            font=FONT_TEXT,
-        )
-
-        text_width = bbox[2] - bbox[0]
-        x = (WIDTH - text_width) // 2
-
-        draw.text(
-            (x, y),
-            line,
-            font=FONT_TEXT,
-            fill=(45, 45, 45),
-        )
-
-        y += line_height
-
-    # Duration marker
-    duration_text = f"{SCENE_SECONDS:.1f}s"
-
-    draw.text(
-        (WIDTH - 160, 65),
-        duration_text,
-        font=FONT_SMALL,
-        fill=(255, 255, 255),
-    )
-
-    return image
-
-
-# ============================================================
-# FILE VALIDATION
-# ============================================================
-
-def validate_png(path):
-    if not path.is_file():
-        raise RuntimeError(
-            f"Missing generated frame: {path.name}"
-        )
-
-    if path.stat().st_size <= 100:
-        raise RuntimeError(
-            f"Generated frame is too small: {path.name}"
+    if path.stat().st_size < 10_000:
+        fail(
+            f"{label} quá nhỏ: "
+            f"{path.stat().st_size} bytes"
         )
 
     try:
         with Image.open(path) as img:
             img.verify()
-
-        with Image.open(path) as img:
-            if img.format != "PNG":
-                raise RuntimeError(
-                    f"Not a PNG: {path.name}"
-                )
-
-            if img.size != (WIDTH, HEIGHT):
-                raise RuntimeError(
-                    f"Wrong dimensions for {path.name}: "
-                    f"{img.size}, expected {(WIDTH, HEIGHT)}"
-                )
-
     except Exception as exc:
-        raise RuntimeError(
-            f"Invalid PNG {path.name}: {exc}"
-        ) from exc
-
-
-def atomic_save_png(image, target):
-    temp = target.with_name(
-        target.name + ".tmp.png"
-    )
+        fail(
+            f"{label} invalid image: {exc}"
+        )
 
     try:
-        image.save(
-            temp,
-            format="PNG",
-            optimize=True,
+        with Image.open(path) as img:
+            width, height = img.size
+            img.load()
+    except Exception as exc:
+        fail(
+            f"{label} không thể decode: {exc}"
         )
 
-        validate_png(temp)
+    if width < 512 or height < 512:
+        fail(
+            f"{label} quá nhỏ: "
+            f"{width}x{height}"
+        )
 
-        temp.replace(target)
-
-    finally:
-        if temp.exists():
-            temp.unlink()
-
-
-# ============================================================
-# CLEAN
-# ============================================================
-
-def clean_old_frames():
-    """
-    Remove only frame1.png ... frame12.png.
-
-    This prevents stale frames from previous workflow runs
-    from being accidentally used.
-    """
-
-    for i in range(1, SCENE_COUNT + 1):
-        root_path = FRAME_DIR / f"frame{i}.png"
-        output_path = OUTPUT_DIR / f"frame{i}.png"
-
-        if root_path.exists():
-            root_path.unlink()
-
-        if output_path.exists():
-            output_path.unlink()
-
-    OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
+    print(
+        f"[OK] {label}: "
+        f"{width}x{height}, "
+        f"{path.stat().st_size} bytes"
     )
 
 
 # ============================================================
-# RENDER
+# IMAGE CACHE
 # ============================================================
 
-def render():
-    print("=" * 60)
-    print("START RENDER")
-    print("=" * 60)
-
-    print(f"Resolution : {WIDTH}x{HEIGHT}")
-    print(f"Duration   : {TOTAL_SECONDS} seconds")
-    print(f"Scenes     : {SCENE_COUNT}")
-    print(f"Scene time : {SCENE_SECONDS:.2f} seconds")
-    print("Audio      : none")
-    print("Music      : none")
-    print("Image API  : none")
-    print("FFmpeg     : not used by render.py")
-
-    print("=" * 60)
-
-    clean_old_frames()
-
-    story = make_story(
-        VIDEO_PROMPT
-    )
-
-    if len(story) != SCENE_COUNT:
-        raise RuntimeError(
-            f"Internal story error: got {len(story)} scenes, "
-            f"expected exactly {SCENE_COUNT}."
-        )
-
-    generated = []
-
-    for index, text in enumerate(
-        story,
-        start=1,
-    ):
-        print(
-            f"[{index:02d}/{SCENE_COUNT:02d}] "
-            f"Creating frame{index}.png ..."
-        )
-
-        image = draw_scene(
-            index - 1,
-            text,
-        )
-
-        root_path = (
-            FRAME_DIR
-            / f"frame{index}.png"
-        )
-
-        output_path = (
-            OUTPUT_DIR
-            / f"frame{index}.png"
-        )
-
-        # Save finished image to both locations.
-        atomic_save_png(
-            image,
-            root_path,
-        )
-
-        atomic_save_png(
-            image,
-            output_path,
-        )
-
-        # Validate immediately.
-        validate_png(root_path)
-        validate_png(output_path)
-
-        generated.append(root_path)
-
-        print(
-            f"[{index:02d}/{SCENE_COUNT:02d}] "
-            f"OK frame{index}.png "
-            f"({root_path.stat().st_size} bytes)"
-        )
-
-    # ========================================================
-    # FINAL STRICT CHECK
-    # ========================================================
-
-    expected = [
-        FRAME_DIR / f"frame{i}.png"
-        for i in range(
-            1,
-            SCENE_COUNT + 1,
-        )
-    ]
-
-    missing = [
-        path.name
-        for path in expected
-        if not path.is_file()
-    ]
-
-    if missing:
-        raise RuntimeError(
-            f"Render finished with missing frames: {missing}"
-        )
-
-    root_pngs = sorted(
-        FRAME_DIR.glob("frame*.png"),
-        key=lambda p: p.name,
-    )
-
-    if len(root_pngs) != SCENE_COUNT:
-        raise RuntimeError(
-            f"Root frame count is {len(root_pngs)}, "
-            f"expected exactly {SCENE_COUNT}."
-        )
-
-    for path in expected:
-        validate_png(path)
-
-    # ========================================================
-    # MANIFEST
-    # ========================================================
-
-    manifest = {
-        "width": WIDTH,
-        "height": HEIGHT,
-        "total_seconds": TOTAL_SECONDS,
-        "scene_count": SCENE_COUNT,
-        "scene_seconds": SCENE_SECONDS,
-        "frames": [
-            path.name
-            for path in expected
-        ],
-        "audio": False,
-        "background_music": False,
-        "image_api": False,
-        "ffmpeg_in_render": False,
-        "prompt": VIDEO_PROMPT,
-        "characters": {
-            key: {
-                "name": value.get(
-                    "name",
-                    "",
-                ),
-                "description": value.get(
-                    "description",
-                    "",
-                ),
-            }
-            for key, value in CHARACTERS.items()
-        },
+def image_cache_key(scene):
+    data = {
+        "model": IMAGE_MODEL,
+        "scene": scene,
+        "miu_hash": sha256_file(MIU_REF),
+        "bong_hash": sha256_file(BONG_REF),
+        "version": 3
     }
 
-    manifest_path = (
-        BASE_DIR
-        / "render_manifest.json"
+    raw = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True
     )
 
-    manifest_path.write_text(
-        json.dumps(
-            manifest,
-            ensure_ascii=False,
-            indent=2,
+    return sha256_text(raw)
+
+
+def generate_image(scene, index):
+    key = image_cache_key(scene)
+
+    cache_file = (
+        CACHE_IMAGES
+        / f"{key}.png"
+    )
+
+    output_file = (
+        SCENES
+        / f"scene_{index:02d}.png"
+    )
+
+    # --------------------------------------------------------
+    # CACHE HIT
+    # --------------------------------------------------------
+
+    if cache_file.exists():
+        print(
+            f"[CACHE HIT] image scene {index}"
+        )
+
+        validate_png(
+            cache_file,
+            f"cached scene {index}"
+        )
+
+        shutil.copy2(
+            cache_file,
+            output_file
+        )
+
+        return output_file
+
+    api_key = os.environ.get(
+        "OPENAI_API_KEY",
+        ""
+    ).strip()
+
+    if not api_key:
+        fail(
+            "OPENAI_API_KEY chưa có."
+        )
+
+    characters = load_json(
+        CHAR_FILE
+    )
+
+    miu = characters["CHAR_01"]
+    bong = characters["CHAR_02"]
+
+    prompt = f"""
+Create a high-end vertical 3D animated movie frame.
+
+AUTHORITATIVE CHARACTER REFERENCES:
+Two attached images are the canonical visual identity
+references.
+
+CHAR_01 — MIU:
+{miu["description"]}
+
+IDENTITY LOCK:
+{", ".join(miu["identity_lock"])}
+
+CHAR_02 — BỐNG:
+{bong["description"]}
+
+IDENTITY LOCK:
+{", ".join(bong["identity_lock"])}
+
+ABSOLUTE RULE:
+The attached character references are authoritative.
+Preserve the same characters. Do not redesign them.
+
+Do not change:
+- species
+- face
+- fur color
+- body proportions
+- ears
+- clothing
+- scarf
+- flower
+- character age
+- character identity
+
+STYLE:
+premium 3D animated feature film,
+cinematic lighting,
+detailed soft fur,
+beautiful expressive eyes,
+high-quality character modeling,
+soft global illumination,
+natural forest environment,
+cinematic depth,
+subtle volumetric light,
+warm emotional storytelling,
+polished professional animation-film look.
+
+SCENE:
+{scene["description"]}
+
+CHARACTER ACTION:
+Miu and Bống should be clearly visible and naturally
+interacting with the scene.
+
+COMPOSITION:
+vertical 9:16,
+portrait framing,
+1080x1920 target,
+clear foreground characters,
+strong storytelling composition.
+
+STRICT NEGATIVE REQUIREMENTS:
+no text,
+no subtitles,
+no logo,
+no watermark,
+no UI,
+no extra limbs,
+no duplicate characters,
+no deformed faces,
+no realistic animal anatomy,
+no character redesign,
+no costume changes.
+"""
+
+    print("")
+    print(
+        "=" * 70
+    )
+    print(
+        f"GENERATING IMAGE {index}"
+    )
+    print(
+        "=" * 70
+    )
+
+    url = (
+        "https://api.openai.com/v1/images/edits"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {api_key}"
+    }
+
+    files = [
+        (
+            "image[]",
+            (
+                "miu.png",
+                open(MIU_REF, "rb"),
+                "image/png"
+            )
         ),
-        encoding="utf-8",
+        (
+            "image[]",
+            (
+                "bong.png",
+                open(BONG_REF, "rb"),
+                "image/png"
+            )
+        )
+    ]
+
+    data = {
+        "model": IMAGE_MODEL,
+        "prompt": prompt,
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "input_fidelity": "high"
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            data=data,
+            files=files,
+            timeout=900
+        )
+    finally:
+        for item in files:
+            item[1][1].close()
+
+    if response.status_code != 200:
+        fail(
+            "Image API error.\n"
+            f"HTTP {response.status_code}\n"
+            f"{response.text[:5000]}"
+        )
+
+    try:
+        payload = response.json()
+    except Exception as exc:
+        fail(
+            f"Image API trả JSON lỗi: {exc}"
+        )
+
+    if (
+        "data" not in payload
+        or not payload["data"]
+        or "b64_json"
+        not in payload["data"][0]
+    ):
+        fail(
+            "Image API không trả ảnh hợp lệ.\n"
+            + json.dumps(
+                payload,
+                ensure_ascii=False
+            )[:5000]
+        )
+
+    import base64
+
+    try:
+        image_bytes = base64.b64decode(
+            payload["data"][0]["b64_json"]
+        )
+    except Exception as exc:
+        fail(
+            f"Không decode được ảnh: {exc}"
+        )
+
+    temp = SCENES / (
+        f".scene_{index:02d}.tmp.png"
     )
 
-    print("=" * 60)
-    print("RENDER SUCCESS")
-    print("=" * 60)
+    with open(temp, "wb") as f:
+        f.write(image_bytes)
+
+    validate_png(
+        temp,
+        f"generated scene {index}"
+    )
+
+    # Normalize to PNG.
+    with Image.open(temp) as img:
+        img = img.convert("RGB")
+        img.save(
+            cache_file,
+            "PNG",
+            optimize=True
+        )
+
+    temp.unlink(
+        missing_ok=True
+    )
+
+    validate_png(
+        cache_file,
+        f"cached scene {index}"
+    )
+
+    shutil.copy2(
+        cache_file,
+        output_file
+    )
+
     print(
-        f"Exactly {SCENE_COUNT} valid PNG frames created."
+        f"[CACHE SAVED] {cache_file}"
+    )
+
+    return output_file
+
+
+# ============================================================
+# TTS
+# ============================================================
+
+VOICES = {
+    "narrator": {
+        "voice": "vi-VN-HoaiMyNeural",
+        "rate": "+0%",
+        "pitch": "+0Hz"
+    },
+
+    "miu": {
+        "voice": "vi-VN-HoaiMyNeural",
+        "rate": "+8%",
+        "pitch": "+12Hz"
+    },
+
+    "bong": {
+        "voice": "vi-VN-NamMinhNeural",
+        "rate": "-3%",
+        "pitch": "-8Hz"
+    }
+}
+
+
+def tts_key(role, text):
+    config = VOICES[role]
+
+    raw = json.dumps(
+        {
+            "role": role,
+            "text": text,
+            "voice": config["voice"],
+            "rate": config["rate"],
+            "pitch": config["pitch"],
+            "version": 2
+        },
+        ensure_ascii=False,
+        sort_keys=True
+    )
+
+    return sha256_text(raw)
+
+
+def make_tts(role, text):
+    text = text.strip()
+
+    if not text:
+        return None
+
+    key = tts_key(
+        role,
+        text
+    )
+
+    output = (
+        CACHE_TTS
+        / f"{key}.mp3"
+    )
+
+    if output.exists():
+        print(
+            f"[CACHE HIT] TTS {role}"
+        )
+
+        if output.stat().st_size > 1000:
+            return output
+
+        output.unlink()
+
+    config = VOICES[role]
+
+    print(
+        f"[TTS] {role}: {text}"
+    )
+
+    run([
+        sys.executable,
+        "-m",
+        "edge_tts",
+        "--voice",
+        config["voice"],
+        "--rate",
+        config["rate"],
+        "--pitch",
+        config["pitch"],
+        "--text",
+        text,
+        "--write-media",
+        str(output)
+    ])
+
+    if (
+        not output.exists()
+        or output.stat().st_size < 1000
+    ):
+        fail(
+            f"TTS thất bại: {output}"
+        )
+
+    return output
+
+
+# ============================================================
+# AUDIO
+# ============================================================
+
+def probe_duration(path):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path)
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        fail(
+            f"ffprobe audio failed: "
+            f"{result.stderr}"
+        )
+
+    try:
+        return float(
+            result.stdout.strip()
+        )
+    except Exception:
+        fail(
+            f"Invalid duration: {path}"
+        )
+
+
+def make_scene_audio(scene, index):
+    files = []
+
+    for role in (
+        "narrator",
+        "miu",
+        "bong"
+    ):
+        text = scene.get(
+            role,
+            ""
+        ).strip()
+
+        if text:
+            path = make_tts(
+                role,
+                text
+            )
+
+            if path:
+                files.append(
+                    path
+                )
+
+    if not files:
+        fail(
+            f"Cảnh {index} không có audio."
+        )
+
+    output = (
+        AUDIO
+        / f"scene_{index:02d}.wav"
+    )
+
+    inputs = []
+
+    for path in files:
+        inputs.extend(
+            [
+                "-i",
+                str(path)
+            ]
+        )
+
+    labels = []
+
+    for i in range(len(files)):
+        labels.append(
+            f"[{i}:a]"
+        )
+
+    filter_complex = (
+        "".join(labels)
+        + f"concat=n={len(files)}:v=0:a=1,"
+        "loudnorm=I=-16:TP=-1.5:LRA=11,"
+        "aresample=48000,"
+        "aformat=channel_layouts=stereo"
+        "[a]"
+    )
+
+    run([
+        "ffmpeg",
+        "-y",
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[a]",
+        "-c:a",
+        "pcm_s16le",
+        str(output)
+    ])
+
+    duration = probe_duration(
+        output
+    )
+
+    print(
+        f"[OK] Scene {index} audio: "
+        f"{duration:.2f}s"
+    )
+
+    return output, duration
+
+
+# ============================================================
+# VIDEO BUILD
+# ============================================================
+
+def build_video(
+    scene_files,
+    audio_files,
+    scene_durations
+):
+    concat_file = (
+        OUTPUT / "scenes.txt"
+    )
+
+    with open(
+        concat_file,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        for path, duration in zip(
+            scene_files,
+            scene_durations
+        ):
+            safe = (
+                str(path)
+                .replace("\\", "/")
+                .replace("'", "'\\''")
+            )
+
+            f.write(
+                f"file '{safe}'\n"
+            )
+
+            f.write(
+                f"duration {duration:.3f}\n"
+            )
+
+        # FFmpeg concat demuxer requires the
+        # final file repeated to preserve duration.
+        if scene_files:
+            last = (
+                str(scene_files[-1])
+                .replace("\\", "/")
+                .replace("'", "'\\''")
+            )
+
+            f.write(
+                f"file '{last}'\n"
+            )
+
+    audio_concat = (
+        OUTPUT / "audio.txt"
+    )
+
+    with open(
+        audio_concat,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        for path in audio_files:
+            safe = (
+                str(path)
+                .replace("\\", "/")
+                .replace("'", "'\\''")
+            )
+
+            f.write(
+                f"file '{safe}'\n"
+            )
+
+    combined_audio = (
+        OUTPUT / "combined_audio.wav"
+    )
+
+    run([
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(audio_concat),
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s16le",
+        str(combined_audio)
+    ])
+
+    run([
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_file),
+        "-i",
+        str(combined_audio),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-vf",
+        (
+            f"scale={WIDTH}:{HEIGHT}:"
+            "force_original_aspect_ratio=decrease,"
+            f"pad={WIDTH}:{HEIGHT}:"
+            "(ow-iw)/2:(oh-ih)/2,"
+            "format=yuv420p"
+        ),
+        "-r",
+        str(FPS),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
+        "-shortest",
+        str(VIDEO)
+    ])
+
+    if not VIDEO.exists():
+        fail(
+            "video.mp4 không được tạo."
+        )
+
+    if VIDEO.stat().st_size < 100_000:
+        fail(
+            "video.mp4 quá nhỏ."
+        )
+
+
+# ============================================================
+# FINAL VALIDATION
+# ============================================================
+
+def validate_video():
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "json",
+            str(VIDEO)
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        fail(
+            f"Final ffprobe failed:\n"
+            f"{result.stderr}"
+        )
+
+    try:
+        data = json.loads(
+            result.stdout
+        )
+    except Exception as exc:
+        fail(
+            f"Không parse ffprobe: {exc}"
+        )
+
+    duration = float(
+        data["format"]["duration"]
+    )
+
+    stream_types = {
+        x["codec_type"]
+        for x in data.get(
+            "streams",
+            []
+        )
+    }
+
+    print("")
+    print(
+        "=" * 70
     )
     print(
-        "frame1.png ... frame12.png are ready "
-        "for video.yml."
+        f"FINAL VIDEO: {duration:.2f}s"
     )
-    print("=" * 60)
+    print(
+        f"STREAMS: {sorted(stream_types)}"
+    )
+    print(
+        "=" * 70
+    )
+
+    if duration < MIN_VIDEO_SECONDS:
+        fail(
+            f"Video chỉ {duration:.2f}s "
+            f"< {MIN_VIDEO_SECONDS}s"
+        )
+
+    if duration > MAX_VIDEO_SECONDS + 2:
+        fail(
+            f"Video {duration:.2f}s "
+            f"> {MAX_VIDEO_SECONDS}s"
+        )
+
+    if "video" not in stream_types:
+        fail(
+            "Video stream missing."
+        )
+
+    if "audio" not in stream_types:
+        fail(
+            "Audio stream missing."
+        )
+
+    print(
+        "[SUCCESS] Video contains video + audio."
+    )
 
 
 # ============================================================
@@ -1438,21 +924,168 @@ def render():
 # ============================================================
 
 def main():
-    try:
-        render()
+    print("=" * 70)
+    print("AI VIDEO MAKER")
+    print("=" * 70)
 
-    except KeyboardInterrupt:
-        print(
-            "Render cancelled."
-        )
-        raise SystemExit(130)
+    require_command("ffmpeg")
+    require_command("ffprobe")
 
-    except Exception as exc:
-        print(
-            f"ERROR: {exc}",
-            file=sys.stderr,
+    for directory in (
+        CACHE_IMAGES,
+        CACHE_TTS,
+        OUTPUT,
+        SCENES,
+        AUDIO
+    ):
+        directory.mkdir(
+            parents=True,
+            exist_ok=True
         )
-        raise SystemExit(1)
+
+    # --------------------------------------------------------
+    # Load story
+    # --------------------------------------------------------
+
+    story = load_json(
+        STORY_FILE
+    )
+
+    scenes = story.get(
+        "scenes",
+        []
+    )
+
+    count = len(scenes)
+
+    if not (
+        MIN_SCENES
+        <= count
+        <= MAX_SCENES
+    ):
+        fail(
+            f"Story có {count} cảnh. "
+            f"Phải có {MIN_SCENES}-{MAX_SCENES}."
+        )
+
+    print(
+        f"Scene count: {count}"
+    )
+
+    # --------------------------------------------------------
+    # References
+    # --------------------------------------------------------
+
+    validate_png(
+        MIU_REF,
+        "Miu reference"
+    )
+
+    validate_png(
+        BONG_REF,
+        "Bong reference"
+    )
+
+    # --------------------------------------------------------
+    # Generate images
+    # --------------------------------------------------------
+
+    scene_images = []
+
+    for index, scene in enumerate(
+        scenes,
+        start=1
+    ):
+        path = generate_image(
+            scene,
+            index
+        )
+
+        scene_images.append(
+            path
+        )
+
+    # --------------------------------------------------------
+    # Generate audio
+    # --------------------------------------------------------
+
+    audio_files = []
+    scene_durations = []
+
+    for index, scene in enumerate(
+        scenes,
+        start=1
+    ):
+        audio, duration = (
+            make_scene_audio(
+                scene,
+                index
+            )
+        )
+
+        audio_files.append(
+            audio
+        )
+
+        scene_durations.append(
+            duration
+        )
+
+    # --------------------------------------------------------
+    # Total duration
+    # --------------------------------------------------------
+
+    total = sum(
+        scene_durations
+    )
+
+    print(
+        f"Raw audio duration: "
+        f"{total:.2f}s"
+    )
+
+    # If too short, slow speech slightly is preferable
+    # to producing a sub-60-second video.
+    if total < MIN_VIDEO_SECONDS:
+        fail(
+            f"Tổng audio chỉ {total:.2f}s. "
+            "Hãy thêm nội dung thoại vào story.json "
+            "để video đạt tối thiểu 60 giây."
+        )
+
+    if total > MAX_VIDEO_SECONDS:
+        fail(
+            f"Tổng audio {total:.2f}s > 90s. "
+            "Hãy giảm nội dung thoại hoặc số cảnh."
+        )
+
+    # --------------------------------------------------------
+    # Build
+    # --------------------------------------------------------
+
+    build_video(
+        scene_images,
+        audio_files,
+        scene_durations
+    )
+
+    # --------------------------------------------------------
+    # Final
+    # --------------------------------------------------------
+
+    validate_video()
+
+    print("")
+    print("=" * 70)
+    print("RENDER COMPLETE")
+    print("=" * 70)
+    print(
+        f"Video: {VIDEO}"
+    )
+    print(
+        f"Size: {VIDEO.stat().st_size} bytes"
+    )
+    print("=" * 70)
 
 
 if __name__ == "__main__":
