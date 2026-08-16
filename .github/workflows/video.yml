@@ -1,6 +1,7 @@
 name: Video Bot
 
 on:
+  workflow_dispatch:
   repository_dispatch:
     types: [create_video]
 
