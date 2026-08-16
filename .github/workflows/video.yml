@@ -29,8 +29,18 @@ jobs:
       # ============================================================
       # 3. INSTALL DEPENDENCIES
       # ============================================================
-      - name: Install dependencies
+            - name: Install FFmpeg and Python dependencies
         run: |
+          echo "Installing FFmpeg..."
+
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+          echo "Checking FFmpeg..."
+          which ffmpeg
+          ffmpeg -version | head -n 1
+
+          echo "Installing Python dependencies..."
           python -m pip install --upgrade pip
 
           if [ -f requirements.txt ]; then
@@ -38,7 +48,6 @@ jobs:
           fi
 
           pip install pillow requests
-
       # ============================================================
       # 4. CLEAN OLD FRAMES
       # ============================================================
