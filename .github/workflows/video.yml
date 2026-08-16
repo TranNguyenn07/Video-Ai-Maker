@@ -8,34 +8,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Python packages
-        run: |
-          pip install pillow requests
+      - run: pip install -r requirements.txt
 
-      - name: Run Render
-        run: |
-          python render.py
+      - run: sudo apt update && sudo apt install -y ffmpeg
 
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      - run: python render.py
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-      - name: Create MP4
-        run: |
-          ffmpeg -y -framerate 1 -i frame%d.png \
-          -c:v libx264 -pix_fmt yuv420p output.mp4
+      - run: |
+          ffmpeg -y -framerate 0.1 -i frame%d.png \
+          -vf "zoompan=z='min(zoom+0.0015,1.15)':d=100:s=720x1280" \
+          -t 60 output.mp4
 
-      - name: Upload Video
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: video
           path: output.mp4
