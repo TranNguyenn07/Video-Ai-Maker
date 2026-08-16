@@ -33,10 +33,16 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python render.py
 
-      - name: Make video
+      - name: Make Video
         run: |
-          ffmpeg -y -framerate 0.1 -i frame%d.png \
-          -t 60 -pix_fmt yuv420p output.mp4
+          ffmpeg -y \
+            -framerate 0.4 -i frame%d.png \
+            -i voice.mp3 \
+            -c:v libx264 \
+            -c:a aac \
+            -shortest \
+            -pix_fmt yuv420p \
+            output.mp4
 
       - uses: actions/upload-artifact@v4
         with:
