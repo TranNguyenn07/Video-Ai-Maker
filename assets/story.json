@@ -1,0 +1,90 @@
+{
+  "title": "Miu và Bống giúp chú chim non",
+  "target_duration_seconds": 60,
+
+  "scenes": [
+    {
+      "description": "Buổi sáng trong khu rừng nhỏ. Miu và Bống đang đi dạo thì nghe thấy tiếng chim non rất khẽ.",
+      "narrator": "Một buổi sáng trong khu rừng nhỏ, Miu và Bống bất ngờ nghe thấy tiếng kêu rất khẽ.",
+      "miu": "",
+      "bong": "Miu ơi, hình như có ai đang cần giúp đỡ."
+    },
+
+    {
+      "description": "Miu và Bống đứng giữa con đường rừng, nhìn quanh để tìm nguồn âm thanh.",
+      "narrator": "Hai người bạn nhỏ dừng lại và cùng nhau nhìn quanh khu rừng.",
+      "miu": "Tớ nghe thấy âm thanh ở phía trước.",
+      "bong": ""
+    },
+
+    {
+      "description": "Miu phát hiện những dấu chân nhỏ trên nền đất phủ lá.",
+      "narrator": "Miu phát hiện những dấu vết nhỏ xíu trên mặt đất phủ đầy lá.",
+      "miu": "Bống nhìn này! Có dấu chân nhỏ ở đây.",
+      "bong": "Chúng ta đi theo nhé."
+    },
+
+    {
+      "description": "Hai người bạn đi sâu hơn vào khu rừng, ánh nắng xuyên qua những tán cây.",
+      "narrator": "Hai người bạn cẩn thận đi sâu hơn vào khu rừng.",
+      "miu": "",
+      "bong": "Đừng lo nhé, chúng mình sẽ tìm thấy bạn ấy."
+    },
+
+    {
+      "description": "Một vài cành cây chắn ngang đường. Miu và Bống cùng dọn đường.",
+      "narrator": "Phía trước có những cành cây chắn ngang con đường.",
+      "miu": "Để tớ dọn chỗ này.",
+      "bong": "Tớ sẽ giúp cậu!"
+    },
+
+    {
+      "description": "Sau những cành cây, hai người bạn nhìn thấy một chú chim non đang run rẩy.",
+      "narrator": "Sau những cành cây, họ nhìn thấy một chú chim non nhỏ đang run rẩy.",
+      "miu": "Bạn đừng sợ nhé.",
+      "bong": "Chúng mình sẽ giúp bạn tìm mẹ."
+    },
+
+    {
+      "description": "Miu ngồi xuống cạnh chú chim non và nhẹ nhàng an ủi.",
+      "narrator": "Miu nhẹ nhàng ngồi xuống bên cạnh chú chim non.",
+      "miu": "Mọi chuyện sẽ ổn thôi.",
+      "bong": ""
+    },
+
+    {
+      "description": "Bống ngẩng lên nhìn những cành cây cao để tìm tổ chim.",
+      "narrator": "Bống ngẩng lên và tìm kiếm một chiếc tổ ở trên cao.",
+      "miu": "",
+      "bong": "Miu ơi, tớ thấy một cái tổ trên cây!"
+    },
+
+    {
+      "description": "Miu và Bống cùng đưa chú chim non đến gần cái cây có tổ.",
+      "narrator": "Hai người bạn cùng đưa chú chim non đến gần cái cây lớn.",
+      "miu": "Có lẽ đây chính là nhà của bạn.",
+      "bong": "Mình cùng chờ một chút nhé."
+    },
+
+    {
+      "description": "Một chú chim mẹ bay về phía cái tổ.",
+      "narrator": "Bỗng một tiếng chim quen thuộc vang lên từ phía trên.",
+      "miu": "Mẹ của bạn ấy đến rồi!",
+      "bong": "Tuyệt quá!"
+    },
+
+    {
+      "description": "Chim non vui mừng đoàn tụ với mẹ. Miu và Bống mỉm cười.",
+      "narrator": "Chú chim non vui mừng khi được trở về bên mẹ.",
+      "miu": "Tớ vui quá!",
+      "bong": "Một việc nhỏ cũng có thể làm ai đó hạnh phúc."
+    },
+
+    {
+      "description": "Miu và Bống cùng nhau trở về trên con đường rừng dưới ánh hoàng hôn ấm áp.",
+      "narrator": "Miu và Bống cùng trở về nhà, vui vì hôm nay họ đã giúp được một người bạn nhỏ.",
+      "miu": "Hôm nay thật là một ngày đẹp.",
+      "bong": "Ừ, vì chúng mình đã làm một việc tốt!"
+    }
+  ]
+}
