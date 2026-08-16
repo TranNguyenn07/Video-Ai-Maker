@@ -1,0 +1,47 @@
+{
+  "CHAR_01": {
+    "name": "Miu",
+    "reference": "assets/characters/miu.png",
+    "description": "Miu, a small round fox kit with bright orange fur, a pure white belly and white-tipped tail, big round expressive eyes, large fluffy ears with white fur tips, two small white fur streaks on both cheeks, wearing a pastel sky-blue scarf with small white polka dots tied around the neck. Child-like proportions, 3D animated movie style, extremely cute and expressive.",
+    "identity_lock": [
+      "exact same character identity",
+      "bright orange fur",
+      "pure white belly",
+      "white-tipped tail",
+      "large fluffy ears",
+      "white ear tips",
+      "two small white fur streaks on both cheeks",
+      "pastel sky-blue scarf",
+      "small white polka dots on scarf",
+      "child-like proportions",
+      "3D animated movie style",
+      "do not redesign",
+      "do not restyle",
+      "do not change species",
+      "do not change clothes",
+      "do not add accessories"
+    ]
+  },
+
+  "CHAR_02": {
+    "name": "Bống",
+    "reference": "assets/characters/bong.png",
+    "description": "Bống, a small rabbit kit with cream-white fur, long upright ears with pale pink inner ears, the left ear slightly drooping, wearing a pale butter-yellow overall, with a small pale pink flower tucked behind the left ear. Child-like proportions, 3D animated movie style, soft and gentle design.",
+    "identity_lock": [
+      "exact same character identity",
+      "cream-white fur",
+      "long upright ears",
+      "left ear slightly drooping",
+      "pale pink inner ears",
+      "pale butter-yellow overall",
+      "small pale pink flower behind left ear",
+      "child-like proportions",
+      "3D animated movie style",
+      "do not redesign",
+      "do not restyle",
+      "do not change species",
+      "do not change clothes",
+      "do not add accessories"
+    ]
+  }
+}
