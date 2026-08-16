@@ -1,12 +1,14 @@
-import requests, os
+from PIL import Image, ImageDraw
+import os
 
-PROMPT = open("prompt.txt","r",encoding="utf-8").read()
-API = os.environ["HF_TOKEN"]
+prompt = "Miu và Bống"
 
-r = requests.post(
-    "https://router.huggingface.co/fal-ai/fal-ai/flux/schnell",
-    headers={"Authorization": f"Bearer {API}"},
-    json={"prompt": PROMPT}
-)
+for i in range(1,6):
+    img = Image.new("RGB",(720,1280),(180,230,255))
+    d = ImageDraw.Draw(img)
 
-print(r.json())
+    d.text((40,60),"AI VIDEO MAKER",fill="black")
+    d.text((40,140),prompt,fill="blue")
+    d.text((40,220),f"Scene {i}",fill="red")
+
+    img.save(f"frame{i}.png")
