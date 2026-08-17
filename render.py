@@ -1,60 +1,30 @@
-
-from PIL import Image, ImageDraw
+from PIL import Image
 import requests, urllib.parse, asyncio, edge_tts
 
-# Đọc 24 cảnh
-scenes = open("story.txt","r",encoding="utf-8").read().splitlines()
+scenes=open("story.txt",encoding="utf-8").read().splitlines()
 
-# Nhân vật
-miu = Image.open("assets/characters/miu.png").convert("RGBA")
-bong = Image.open("assets/characters/bong.png").convert("RGBA")
+miu=Image.open("assets/characters/miu.png").convert("RGBA").resize((260,260))
+bong=Image.open("assets/characters/bong.png").convert("RGBA").resize((220,220))
 
-miu = miu.resize((250,250))
-bong = bong.resize((230,230))
+voice=[]
 
-voice_text = []
-
-for i, scene in enumerate(scenes,1):
-
-    prompt = urllib.parse.quote(
-        f"cute 3D Pixar forest, pastel, children animation, {scene}"
+for i,s in enumerate(scenes,1):
+    q=urllib.parse.quote(
+      f"cute 2D children storybook forest, pastel, {s}"
     )
+    bg=requests.get("https://image.pollinations.ai/prompt/"+q,timeout=60).content
+    open("bg.png","wb").write(bg)
 
-    bg = requests.get(
-        "https://image.pollinations.ai/prompt/"+prompt,
-        timeout=60
-    )
-
-    open("bg.png","wb").write(bg.content)
-
-    img = Image.open("bg.png").convert("RGBA")
-
-    # Vị trí nhân vật
-    x1 = 70 + (i%3)*25
-    x2 = 390 - (i%2)*20
-
-    img.alpha_composite(miu,(x1,770))
-    img.alpha_composite(bong,(x2,790))
-
-    draw = ImageDraw.Draw(img)
-
-    draw.rounded_rectangle(
-        (25,40,695,180),
-        radius=25,
-        fill=(255,255,255,210)
-    )
-
-    draw.text((45,60),f"Scene {i}",fill="orange")
-    draw.text((45,105),scene,fill="black")
-
+    img=Image.open("bg.png").convert("RGBA")
+    img.alpha_composite(miu,(60+(i%4)*20,760))
+    img.alpha_composite(bong,(400-(i%3)*25,790))
     img.convert("RGB").save(f"frame{i}.png")
-    voice_text.append(scene)
+    voice.append(s)
 
-async def make_voice():
-    tts = edge_tts.Communicate(
-        " ".join(voice_text),
-        "vi-VN-HoaiMyNeural"
-    )
-    await tts.save("voice.mp3")
+async def tts():
+    await edge_tts.Communicate(
+      " ".join(voice),
+      "vi-VN-HoaiMyNeural"
+    ).save("voice.mp3")
 
-asyncio.run(make_voice())
+asyncio.run(tts())
