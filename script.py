@@ -1,35 +1,44 @@
 import os
 
-topic = os.environ["PROMPT"].strip()
+topic = os.environ["PROMPT"].lower()
 
-hero = "Miu"
-friend = "Bống"
+# Nhận diện bối cảnh
+if "biển" in topic or "cá" in topic:
+    place = "đại dương xanh"
+elif "vũ trụ" in topic:
+    place = "không gian đầy sao"
+elif "khủng long" in topic:
+    place = "thung lũng khủng long"
+elif "trường" in topic:
+    place = "ngôi trường cầu vồng"
+else:
+    place = "khu rừng phép thuật"
 
 story = [
-f"{hero} và {friend} bắt đầu cuộc phiêu lưu: {topic}.",
-"Hai bạn bước vào một khu rừng đầy màu sắc.",
-"Một bạn nhỏ đang gặp khó khăn.",
-f"{hero} bình tĩnh quan sát mọi chuyện.",
-f"{friend} nghĩ ra một ý tưởng hay.",
-"Cả hai quyết định giúp đỡ.",
-"Họ cùng tìm manh mối đầu tiên.",
+f"Miu và Bống bắt đầu chuyến phiêu lưu tại {place}.",
+f"Hôm nay nhiệm vụ là: {topic}.",
+"Khung cảnh thật đẹp và đầy màu sắc.",
+"Hai bạn nghe thấy tiếng gọi giúp đỡ.",
+"Miu bình tĩnh quan sát xung quanh.",
+"Bống nghĩ ra một kế hoạch thông minh.",
+"Cả hai cùng tiến về phía trước.",
 "Một thử thách bất ngờ xuất hiện.",
-"Hai bạn vượt qua bằng sự đoàn kết.",
-"Các con vật trong rừng cổ vũ.",
-"Hành trình trở nên gay cấn hơn.",
-"Một tia hy vọng xuất hiện.",
-"Họ tiến gần mục tiêu cuối cùng.",
-"Một trở ngại lớn chặn đường.",
-f"{hero} dũng cảm bảo vệ mọi người.",
-f"{friend} thông minh giải quyết vấn đề.",
-"Cả nhóm cùng chung sức.",
-"Mọi khó khăn dần biến mất.",
-"Khu rừng trở nên rực rỡ.",
-"Những bông hoa nở khắp nơi.",
-"Các bạn nhỏ vui vẻ cười đùa.",
+"Hai bạn hợp tác vượt qua.",
+"Mọi người bắt đầu mỉm cười.",
+"Con đường dần sáng hơn.",
+"Một người bạn mới xuất hiện.",
+"Cả nhóm cùng tìm lời giải.",
+"Khó khăn lớn nhất đang chờ phía trước.",
+"Miu dũng cảm bảo vệ mọi người.",
+"Bống giúp mọi người bằng trí thông minh.",
+"Niềm hy vọng dần xuất hiện.",
+"Ánh sáng rực rỡ bao phủ khắp nơi.",
+"Các con vật vui vẻ reo hò.",
+"Khung cảnh trở nên thật kỳ diệu.",
 "Mọi người cảm ơn Miu và Bống.",
-"Một bài học về lòng tốt được kể.",
-"Hẹn gặp lại trong chuyến phiêu lưu tiếp theo!"
+"Bài học về lòng tốt được lan tỏa.",
+"Ai cũng hạnh phúc và đoàn kết.",
+"Hẹn gặp lại trong tập tiếp theo!"
 ]
 
 with open("story.txt","w",encoding="utf-8") as f:
