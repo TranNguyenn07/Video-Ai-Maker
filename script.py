@@ -1,32 +1,36 @@
 import os
 
-topic = os.environ["PROMPT"]
+topic = os.environ["PROMPT"].strip()
+
+hero = "Miu"
+friend = "Bống"
 
 story = [
-f"Một buổi sáng, Miu và Bống bắt đầu cuộc phiêu lưu: {topic}.",
-"Hai bạn bước vào khu rừng đầy ánh nắng.",
-"Bỗng một bạn nhỏ cần giúp đỡ.",
-"Miu nghĩ ra kế hoạch đầu tiên.",
-"Bống động viên mọi người.",
-"Cả hai cùng hợp tác vượt thử thách.",
-"Những người bạn mới xuất hiện.",
-"Một chướng ngại vật cản đường.",
-"Miu dùng lòng dũng cảm vượt qua.",
-"Bống dùng sự thông minh giúp đỡ.",
-"Cả nhóm tiến gần mục tiêu.",
-"Hy vọng lại xuất hiện.",
-"Thử thách cuối cùng bắt đầu.",
-"Miu và Bống không bỏ cuộc.",
-"Mọi người cùng chung sức.",
-"Phép màu của lòng tốt xuất hiện.",
-"Cảnh vật trở nên rực rỡ.",
-"Các con vật vui mừng.",
-"Miu mỉm cười hạnh phúc.",
-"Bống cảm ơn tất cả.",
-"Cầu vồng xuất hiện trên bầu trời.",
-"Cả nhóm chơi đùa vui vẻ.",
-"Một bài học ý nghĩa được kể.",
-"Hẹn gặp lại ở tập tiếp theo."
+f"{hero} và {friend} bắt đầu cuộc phiêu lưu: {topic}.",
+"Hai bạn bước vào một khu rừng đầy màu sắc.",
+"Một bạn nhỏ đang gặp khó khăn.",
+f"{hero} bình tĩnh quan sát mọi chuyện.",
+f"{friend} nghĩ ra một ý tưởng hay.",
+"Cả hai quyết định giúp đỡ.",
+"Họ cùng tìm manh mối đầu tiên.",
+"Một thử thách bất ngờ xuất hiện.",
+"Hai bạn vượt qua bằng sự đoàn kết.",
+"Các con vật trong rừng cổ vũ.",
+"Hành trình trở nên gay cấn hơn.",
+"Một tia hy vọng xuất hiện.",
+"Họ tiến gần mục tiêu cuối cùng.",
+"Một trở ngại lớn chặn đường.",
+f"{hero} dũng cảm bảo vệ mọi người.",
+f"{friend} thông minh giải quyết vấn đề.",
+"Cả nhóm cùng chung sức.",
+"Mọi khó khăn dần biến mất.",
+"Khu rừng trở nên rực rỡ.",
+"Những bông hoa nở khắp nơi.",
+"Các bạn nhỏ vui vẻ cười đùa.",
+"Mọi người cảm ơn Miu và Bống.",
+"Một bài học về lòng tốt được kể.",
+"Hẹn gặp lại trong chuyến phiêu lưu tiếp theo!"
 ]
 
-open("story.txt","w",encoding="utf-8").write("\n".join(story))
+with open("story.txt","w",encoding="utf-8") as f:
+    f.write("\n".join(story))
